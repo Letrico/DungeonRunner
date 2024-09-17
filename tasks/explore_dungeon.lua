@@ -55,7 +55,8 @@ function get_actor(name)
     local actors = actors_manager:get_all_actors()
     for _, actor in pairs(actors) do
         local skin = actor:get_skin_name()
-        if skin:match(name) then
+        local health = actor:get_current_health()
+        if skin:match(name) and health > 1 then
             return actor
         end
     end
@@ -168,6 +169,17 @@ local task  = {
     init_dungeon = function(self)
         current_objective = dungeon_objectives[self.zone].objectives[objective_index]
         console.print("current_objective: " .. tostring(current_objective))
+        if dungeon_objectives[self.zone].explorer.max_target_distance then
+            console.print('huuuuh')
+            local max_target_distance = dungeon_objectives[self.zone].explorer.max_target_distance
+            local target_distance_states = dungeon_objectives[self.zone].explorer.target_distance_states
+            local check_radius = dungeon_objectives[self.zone].explorer.check_radius
+            local exploration_radius = dungeon_objectives[self.zone].explorer.exploration_radius
+            if max_target_distance and target_distance_states and check_radius and exploration_radius then 
+                explorer:set_target_distance(max_target_distance, target_distance_states, check_radius, exploration_radius)
+            end
+        end
+        
         self.current_state = dungeon_state.EXPLORE
     end,
 
@@ -211,13 +223,14 @@ local task  = {
                     end
                 end
             end
-        elseif current_objective == "kill" then
+        elseif current_objective:match("kill") then
             target_name = dungeon_objectives[self.zone][current_objective].name
             local count = dungeon_objectives[self.zone][current_objective].count
             console.print("count: " .. tostring(count))
             console.print("kill_count: " .. tostring(kill_count))
             if kill_count == count then
                 objective_index = objective_index + 1
+                kill_count = 0
                 current_objective = dungeon_objectives[self.zone].objectives[objective_index]
                 return
             end
@@ -362,8 +375,7 @@ local task  = {
     kill_boss = function(self)
         console.print("kill boss")
         local target = get_actor(target_name)
-        local health = target:get_current_health()
-        if target and health > 1 then
+        if target then
             if utils.distance_to(target) > 2 then
                 console.print("Found boss! Going to boss!")
                 bomb_to(target:get_position())

@@ -75,12 +75,13 @@ local explored_buffer = 2         -- Puffer um erkundete Bereiche in Metern
 local max_target_distance = 100    -- Maximale Entfernung für ein neues Ziel
 local target_distance_states = {70, 60, 50, 15}
 local target_distance_index = 1
-local unstuck_target_distance = 5 -- Maximale Entfernung für ein Unstuck-Ziel
+local unstuck_target_distance = 15 -- Maximale Entfernung für ein Unstuck-Ziel
 local stuck_threshold = 4         -- Sekunden, bevor der Charakter als "steckengeblieben" gilt
 local last_position = nil
 local last_move_time = 0
 local last_explored_targets = {}
 local max_last_targets = 5
+local check_radius = 10
 
 -- A* pathfinding variables
 local current_path = {}
@@ -120,6 +121,70 @@ local function calculate_distance(point1, point2)
     return point1:dist_to_ignore_z(point2)
 end
 
+function explorer:set_target_distance(distance, target_distance, radius, exploration)
+    max_target_distance = distance
+    target_distance_states = target_distance
+    check_radius = radius
+    exploration_radius = exploration
+end
+
+local function get_barrier_position()
+    local actors = actors_manager:get_ally_actors()
+    local closest_barrier = nil
+    local closest_distance = math.huge
+    local player_pos = get_player_position()
+
+    for _, actor in pairs(actors) do
+        if actor:get_skin_name():match("DRLGKit_fxKit_harmless_barrierWall_blood_01") then
+            local actor_pos = actor:get_position()
+            local distance = calculate_distance(player_pos, actor_pos)
+            if distance < closest_distance then
+                closest_barrier = actor
+                closest_distance = distance
+            end
+        end
+    end
+
+    if closest_barrier then
+        return closest_barrier:get_position()
+    end
+    return nil
+end
+
+local function is_point_walkeable_custom(point)
+    if not utility.is_point_walkeable(point) then
+        return false
+    end
+
+    local player_pos = get_player_position()
+    local barrier_pos = get_barrier_position()
+
+    if barrier_pos then
+        local player_to_barrier = calculate_distance(player_pos, barrier_pos)
+        local player_to_point = calculate_distance(player_pos, point)
+        local barrier_to_point = calculate_distance(barrier_pos, point)
+
+        -- Calculate vectors
+        local player_to_barrier_vec = vec3:new(barrier_pos:x() - player_pos:x(), barrier_pos:y() - player_pos:y(), barrier_pos:z() - player_pos:z())
+        local player_to_point_vec = vec3:new(point:x() - player_pos:x(), point:y() - player_pos:y(), point:z() - player_pos:z())
+
+        -- Calculate dot product
+        local dot_product = player_to_barrier_vec:x() * player_to_point_vec:x() + 
+                            player_to_barrier_vec:y() * player_to_point_vec:y() + 
+                            player_to_barrier_vec:z() * player_to_point_vec:z()
+
+        -- If the point is further from the player than the swirl mesh
+        -- and the dot product is positive (point is in the same direction as the swirl mesh)
+        -- consider it unwalkable
+        if player_to_point > player_to_barrier and dot_product > 0 then
+            -- console.print("Point marked as unwalkable")
+            return false
+        end
+    end
+
+    return true
+end
+
 local explored_area_bounds = {
     min_x = math.huge,
     max_x = -math.huge,
@@ -153,7 +218,6 @@ local function check_walkable_area()
     -- if os.time() % 5 ~= 0 then return end  -- Only run every 5 seconds
 
     local player_pos = get_player_position()
-    local check_radius = 10 -- Überprüfungsradius in Metern
 
     mark_area_as_explored(player_pos, exploration_radius)
 
@@ -168,7 +232,8 @@ local function check_walkable_area()
                 print("Checking point:", point:x(), point:y(), point:z()) -- Debug print
                 point = set_height_of_valid_position(point)
 
-                if utility.is_point_walkeable(point) then
+                -- if utility.is_point_walkeable(point) then
+                if is_point_walkeable_custom(point) then
                     if is_point_in_explored_area(point) then
                     --    graphics.text_3d("explored", point, 15, color_white(128))
                     else
@@ -186,6 +251,8 @@ local function reset_exploration()
         max_x = -math.huge,
         min_y = math.huge,
         max_y = -math.huge,
+        min_z = math.huge,
+        max_z = -math.huge,
     }
     target_position = nil
     last_position = nil
@@ -193,13 +260,33 @@ local function reset_exploration()
     current_path = {}
     path_index = 1
     exploration_mode = "unexplored"
+
+    -- Determine the direction the player came from
+    local player_pos = get_player_position()
+    local previous_direction = last_movement_direction or { x = 0, y = 0 }
+
+    -- Choose a new direction that's different from the previous one
+    local new_direction = { x = 0, y = 0 }
+    repeat
+        new_direction.x = math.random(-1, 1)
+        new_direction.y = math.random(-1, 1)
+    until new_direction.x ~= -previous_direction.x or new_direction.y ~= -previous_direction.y
+
+    -- Normalize the new direction
+    local length = math.sqrt(new_direction.x^2 + new_direction.y^2)
+    if length > 0 then
+        new_direction.x = new_direction.x / length
+        new_direction.y = new_direction.y / length
+    end
+
+    exploration_direction = new_direction
     last_movement_direction = nil
 
-    console.print("Exploration reset. All areas marked as unexplored.")
+    console.print("Exploration reset. All areas marked as unexplored. New direction set.")
 end
 
 local function is_near_wall(point)
-    local wall_check_distance = 1.5 -- Abstand zur Überprüfung von Wänden
+    local wall_check_distance = 2 -- Abstand zur Überprüfung von Wänden
     local directions = {
         { x = 1, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 1 }, { x = 0, y = -1 },
         { x = 1, y = 1 }, { x = 1, y = -1 }, { x = -1, y = 1 }, { x = -1, y = -1 }
@@ -212,7 +299,8 @@ local function is_near_wall(point)
             point:z()
         )
         check_point = set_height_of_valid_position(check_point)
-        if not utility.is_point_walkeable(check_point) then
+        -- if not utility.is_point_walkeable(check_point) then
+        if not is_point_walkeable_custom(check_point) then
             return true
         end
     end
@@ -235,7 +323,8 @@ local function find_central_unexplored_target()
 
             point = set_height_of_valid_position(point)
 
-            if utility.is_point_walkeable(point) and not is_point_in_explored_area(point) then
+            -- if utility.is_point_walkeable(point) and not is_point_in_explored_area(point) then
+            if is_point_walkeable_custom(point) and not is_point_in_explored_area(point) then
                 table.insert(unexplored_points, point)
                 min_x = math.min(min_x, point:x())
                 max_x = math.max(max_x, point:x())
@@ -268,15 +357,18 @@ local function find_random_explored_target()
 
     for x = -check_radius, check_radius, grid_size do
         for y = -check_radius, check_radius, grid_size do
-            local point = vec3:new(
-                player_pos:x() + x,
-                player_pos:y() + y,
-                player_pos:z()
-            )
-            point = set_height_of_valid_position(point)
-            local grid_key = get_grid_key(point)
-            if utility.is_point_walkeable(point) and explored_areas[grid_key] and not is_near_wall(point) then
-                table.insert(explored_points, point)
+            for z = -check_radius, check_radius, grid_size do
+                local point = vec3:new(
+                    player_pos:x() + x,
+                    player_pos:y() + y,
+                    player_pos:z() + z
+                )
+                point = set_height_of_valid_position(point)
+                local grid_key = get_grid_key(point)
+                -- if utility.is_point_walkeable(point) and explored_areas[grid_key] and not is_near_wall(point) then
+                if is_point_walkeable_custom(point) and explored_areas[grid_key] and not is_near_wall(point) then
+                    table.insert(explored_points, point)
+                end
             end
         end
     end
@@ -324,7 +416,8 @@ local function find_explored_direction_target()
         local target_point = player_pos + direction_vector
         target_point = set_height_of_valid_position(target_point)
 
-        if utility.is_point_walkeable(target_point) and is_point_in_explored_area(target_point) then
+        -- if utility.is_point_walkeable(target_point) and is_point_in_explored_area(target_point) then
+        if is_point_walkeable_custom(target_point) and is_point_in_explored_area(target_point) then
             local distance = calculate_distance(player_pos, target_point)
             if distance > best_distance and not is_in_last_targets(target_point) then
                 best_target = target_point
@@ -355,16 +448,19 @@ local function find_unstuck_target()
 
     for x = -unstuck_target_distance, unstuck_target_distance, grid_size do
         for y = -unstuck_target_distance, unstuck_target_distance, grid_size do
-            local point = vec3:new(
-                player_pos:x() + x,
-                player_pos:y() + y,
-                player_pos:z()
-            )
-            point = set_height_of_valid_position(point)
+            for z = -unstuck_target_distance, unstuck_target_distance, grid_size do -- Inclui z no loop
+                local point = vec3:new(
+                    player_pos:x() + x,
+                    player_pos:y() + y,
+                    player_pos:z() + z
+                )
+                point = set_height_of_valid_position(point)
 
-            local distance = calculate_distance(player_pos, point)
-            if utility.is_point_walkeable(point) and distance >= 2 and distance <= unstuck_target_distance then
-                table.insert(valid_targets, point)
+                local distance = calculate_distance(player_pos, point)
+                -- if utility.is_point_walkeable(point) and distance >= 2 and distance <= unstuck_target_distance then
+                if is_point_walkeable_custom(point) and distance >= 2 and distance <= unstuck_target_distance then
+                    table.insert(valid_targets, point)
+                end
             end
         end
     end
@@ -427,7 +523,8 @@ local function get_neighbors(point)
             point:z()
         )
         neighbor = set_height_of_valid_position(neighbor)
-        if utility.is_point_walkeable(neighbor) then
+        -- if utility.is_point_walkeable(neighbor) then
+        if is_point_walkeable_custom(neighbor) then
             if not last_movement_direction or
                 (dir.x ~= -last_movement_direction.x or dir.y ~= -last_movement_direction.y) then
                 table.insert(neighbors, neighbor)
@@ -442,7 +539,8 @@ local function get_neighbors(point)
             point:z()
         )
         back_direction = set_height_of_valid_position(back_direction)
-        if utility.is_point_walkeable(back_direction) then
+        -- if utility.is_point_walkeable(back_direction) then
+        if is_point_walkeable_custom(back_direction) then
             table.insert(neighbors, back_direction)
         end
     end
@@ -518,6 +616,8 @@ end
 
 local last_a_star_call = 0.0
 local function move_to_target()
+    console.print(max_target_distance)
+    console.print(check_radius)
     if target_position then
         local player_pos = get_player_position()
         if calculate_distance(player_pos, target_position) > 200 then
@@ -677,6 +777,11 @@ on_render(function()
 
     if not settings.enabled then
         return
+    end
+
+    local barrier_pos = get_barrier_position()
+    if barrier_pos then
+        graphics.text_3d("Barrier", barrier_pos, 20, color_blue(255))
     end
 
     check_walkable_area()
