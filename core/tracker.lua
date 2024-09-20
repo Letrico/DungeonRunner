@@ -22,6 +22,7 @@ local tracker = {
     teleported_from_town = false,
     keep_items = 0,
     helltide_start = false,
+    blocker = {}
 }
 
 function tracker.check_time(key, delay)

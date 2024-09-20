@@ -64,6 +64,7 @@ end
 local utils = require "core.utils"
 local enums = require "data.enums"
 local settings = require "core.settings"
+local tracker = require "core.tracker"
 local explorer = {
     enabled = false,
 }
@@ -82,6 +83,7 @@ local last_move_time = 0
 local last_explored_targets = {}
 local max_last_targets = 5
 local check_radius = 10
+local interacted_objects_blacklist = {}
 
 -- A* pathfinding variables
 local current_path = {}
@@ -135,7 +137,8 @@ local function get_barrier_position()
     local player_pos = get_player_position()
 
     for _, actor in pairs(actors) do
-        if actor:get_skin_name():match("DRLGKit_fxKit_harmless_barrierWall_blood_01") then
+        -- if actor:get_skin_name():match("DRLGKit_fxKit_harmless_barrierWall_blood_01") or actor:get_skin_name():match("DRLG_Blocker_Protodun_Keep") then
+        if tracker.blocker[actor:get_skin_name()] then
             local actor_pos = actor:get_position()
             local distance = calculate_distance(player_pos, actor_pos)
             if distance < closest_distance then
@@ -149,6 +152,21 @@ local function get_barrier_position()
         return closest_barrier:get_position()
     end
     return nil
+end
+
+function open_doors()
+    local actors = actors_manager:get_ally_actors()
+    for _, actor in pairs(actors) do
+        local name = actor:get_skin_name()
+        local actor_id = actor:get_id()
+        if name:match("ProtoDun_Door") and not interacted_objects_blacklist[actor_id] then
+            if utils.distance_to(actor:get_position()) < 1.5 then
+                console.print("door!")
+                interact_object(actor)
+                interacted_objects_blacklist[actor_id] = true
+            end
+        end
+    end
 end
 
 local function is_point_walkeable_custom(point)
@@ -215,7 +233,7 @@ end
 end
 
 local function check_walkable_area()
-    -- if os.time() % 5 ~= 0 then return end  -- Only run every 5 seconds
+    if os.time() % 5 ~= 0 then return end  -- Only run every 5 seconds
 
     local player_pos = get_player_position()
 
@@ -616,10 +634,9 @@ end
 
 local last_a_star_call = 0.0
 local function move_to_target()
-    console.print(max_target_distance)
-    console.print(check_radius)
     if target_position then
         local player_pos = get_player_position()
+        open_doors()
         if calculate_distance(player_pos, target_position) > 200 then
             target_position = find_target(false)
             current_path = {}
@@ -779,10 +796,10 @@ on_render(function()
         return
     end
 
-    local barrier_pos = get_barrier_position()
-    if barrier_pos then
-        graphics.text_3d("Barrier", barrier_pos, 20, color_blue(255))
-    end
+    -- local barrier_pos = get_barrier_position()
+    -- if barrier_pos then
+    --     graphics.text_3d("Barrier", barrier_pos, 20, color_blue(255))
+    -- end
 
     check_walkable_area()
         
