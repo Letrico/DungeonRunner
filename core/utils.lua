@@ -21,7 +21,7 @@ function utils.distance_to(target)
         target_pos = target
     end
 
-    return player_pos:dist_to(target_pos)
+    return player_pos:dist_to_ignore_z(target_pos)
 end
 
 ---@param identifier string|number string or number of the aura to check for
